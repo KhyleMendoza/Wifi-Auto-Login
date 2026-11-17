@@ -1,0 +1,9 @@
+config.ini
+logs/
+dns_changed.txt
+selftest.txt
+build/
+dist/
+__pycache__/
+*.pyc
+*.exe
