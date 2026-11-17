@@ -1,83 +1,76 @@
-# Wi-Fi Auto Login (FortiGate)
+# WiFi Auto Login
 
-Our office Wi-Fi (L&K-Office and L&K-Guest) sits behind a FortiGate login page, and it kicks you out every so often. Logging back in by hand gets old fast, especially when the guest Wi-Fi decides DNS doesn't work until you're logged in. So I made this little tool that does it for me.
+At work our PCs connect to the internet through a Wi-Fi login page (a FortiGate captive portal). The problem is it almost never works on the first try. You open the browser, wait for the login page, type your username and password... and nothing. No internet. So you try again. And again. Sometimes the login page doesn't even show up, sometimes it does but the login doesn't go through, and sometimes it takes 10 or 20 tries before it finally connects.
 
-You put in your username and password once, press Start, and it keeps you online.
+I got tired of doing that by hand (and so did everyone else), so I made this app. It keeps trying for you until you're actually connected.
 
 ![Screenshot of the app](docs/screenshot.png)
 
 ## Download
 
-Grab `WiFiAutoLogin.exe` from the [Releases](../../releases) page. No install needed and no Python needed, just put it in a folder and run it.
+Get `WiFiAutoLogin.exe` from the [Releases](../../releases) page. It's a single file, no install and no Python needed.
 
-Windows will ask for admin rights when it opens. That's on purpose: `ipconfig /release` and `/renew` don't work without it. You can say no and it will still log in, it just can't reset the network when things get stuck.
-
-The first time it runs it creates a `config.ini` and a `logs` folder next to the exe.
+When you open it, Windows asks for admin rights. Say yes. The app needs it to reset the network (flushdns / release / renew) when it gets stuck. It will still try to log in without admin, it just can't do the reset part.
 
 ## How to use it
 
 1. Open the app.
-2. Type your username and password. Tick "Remember password" if you don't want to type it every time (heads up: it's saved as plain text in `config.ini`).
-3. Press **Start**.
+2. Enter your username and password. Tick "Remember password" if you don't want to type it every time.
+3. Press **Start** and leave it alone.
 
-That's it for most people. If you want it to stay running in the background and log you in again whenever you get kicked out, tick **Watch mode** before pressing Start.
+It will keep trying until the internet works. If you want it to stay running and log you back in whenever you get disconnected, tick **Watch mode** before pressing Start.
 
-### Different settings per Wi-Fi
+## What it does
 
-L&K-Office and L&K-Guest don't behave the same, so you can give each Wi-Fi its own settings. Pick the Wi-Fi in "Settings for", change what's different, then press **Save / Apply**. The app checks which Wi-Fi you're on and uses the right settings automatically. Any Wi-Fi without its own settings (or a cable connection) uses Default.
+Pretty much what you'd do by hand, just without getting tired of it:
 
-If you leave the portal address blank, the app finds it on its own and fills it in.
+- **Gets the login page to show up.** It opens a list of websites (http and https) one after another until the FortiGate redirects to its login page. Each site gets several tries, and the order changes every round, because some sites trigger the portal and some just don't on a given day.
+- **Logs in for you.** Once the login page shows up, it fills in your username and password and submits it.
+- **Checks that it really worked.** The portal saying "OK" doesn't mean you're online, so it opens a real page to make sure. It only says connected when the internet actually works.
+- **Resets the network when it gets stuck.** After every 3 failed attempts it runs flushdns, release and renew, then keeps going. It doesn't give up unless you set a limit.
 
-### Other options
+## L&K-Office and L&K-Guest
 
-- **Keep the PC on this Wi-Fi**: if Windows hops over to another network, the app switches back.
-- **Run flushdns / release / renew**: after a few failed tries it resets the network, same as you'd do by hand.
-- **Fix broken Wi-Fi DNS**: on the guest Wi-Fi the DNS sometimes never works, even after logging in. With this on, the app points the Wi-Fi adapter to 8.8.8.8 and 1.1.1.1. It switches back to normal when you join a different Wi-Fi.
-- **Start automatically when the app opens**: handy if you put the exe in your Startup folder.
+It works on both. The app sees which Wi-Fi you're on and uses the settings for that one, so each network can have its own username, password and portal address. If you leave the portal address blank, it finds it by itself.
 
-## What it actually does
+You can also pick which Wi-Fi the PC should be on and tick "Keep the PC on this Wi-Fi", so if Windows jumps to another network the app moves it back.
 
-Basically it repeats the steps you'd do in a browser:
+L&K-Guest has one more problem: even after you log in, websites often won't open because the guest network's DNS doesn't answer. With **Fix broken Wi-Fi DNS** ticked, the app switches the Wi-Fi to 8.8.8.8 / 1.1.1.1 after login, and puts it back to automatic when you go to a different network.
 
-1. Opens a normal http site (google, neverssl, our landing page...) so the FortiGate redirects to its login page.
-2. If nothing opens because DNS is dead, it goes to the portal by IP address instead (`http://1.1.1.1`, the gateway on port 1003, etc).
-3. Fills in the login form and submits it.
-4. Checks that `landing.lkphils.com` (or the internet in general) really loads.
-5. If it still isn't working after a few tries, it does flushdns / release / renew and starts over.
+## Logs
 
-Everything it does goes into `logs/wifi_login_YYYY-MM-DD.txt`. The log never contains your password. Logs older than 30 days get deleted.
+Every attempt is written to `logs/wifi_login_YYYY-MM-DD.txt` next to the exe: which network you're on, your IP, the gateway, and what happened at each step. Useful when you want to know why it took 15 tries this morning. Your password never goes in the log. Old logs are deleted after 30 days.
+
+## Settings
+
+Everything is in the window, and you can change things while it's running (press **Save / Apply**): the list of sites it tries, how many tries per site, the wait between tries, when to reset the network, the portal address, and so on. Settings are saved in `config.ini` next to the exe.
+
+Note: if you tick "Remember password", it's stored as plain text in `config.ini`. Don't share that file.
 
 ## Running from source
-
-If you'd rather run the Python version:
 
 ```
 pip install requests
 python wifi_login_gui.py
 ```
 
-Or double-click `run_wifi_login.bat`, which asks for admin rights first.
-
-There's also a command-line version with no window:
+Or double-click `run_wifi_login.bat`. There's also a version with no window:
 
 ```
 python wifi_login.py            # log in once and exit
 python wifi_login.py --watch    # keep running
 ```
 
-Settings go in `config.ini`. Copy `config.example.ini` to `config.ini` to start, or just let the app make one.
-
-## Building the exe
+To build the exe yourself:
 
 ```
 pip install pyinstaller requests
 python -m PyInstaller --noconfirm WiFiAutoLogin.spec
 ```
 
-The exe ends up in `dist/`. Set `WIFI_NO_UAC=1` before building if you want a version that doesn't ask for admin.
+It ends up in the `dist` folder. I tuned the build so it opens fast even on our older PCs, and only one copy can run at a time.
 
-## Things to know
+## Known limits
 
-- Only tested on English Windows 10/11. It reads the output of `netsh`, which is in a different language on other Windows versions.
-- If you don't pick an adapter, release/renew resets all of them, including your cable connection.
-- Your password is stored in plain text if you tick Remember. Don't share your `config.ini`.
+- Only tested on English Windows 10/11.
+- If you don't choose an adapter, the network reset resets all of them, cable included.
