@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import configparser
 import ctypes
+import json
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 from tkinter.scrolledtext import ScrolledText
 
 import wifi_login as core
@@ -19,6 +21,7 @@ ALL_ADAPTERS = "(all adapters)"
 ANY_WIFI = "(stay on whatever Wi-Fi Windows picks)"
 DEFAULT_LABEL = "Default (any other Wi-Fi / cable)"
 WINDOW_TITLE = "Wi-Fi Auto Login (FortiGate)"
+PICKER_PASSWORD = "password"
 WIFI_POLL_MS = 5000
 
 _MUTEX_NAME = "Local\\WiFiAutoLogin_single_instance"
@@ -77,6 +80,7 @@ DEFAULTS = {
         "tries_per_site": "10",
         "shuffle_sites": "yes",
         "attempts_before_reset": "3",
+        "login_retries": "20",
         "delay_seconds": "2",
         "max_attempts": "0",
         "reset_network": "yes",
@@ -121,6 +125,8 @@ class App(tk.Tk):
         self.cur_profile = ""
         self.windows_wifis: list[str] = []
         self.last_ssid: str | None = None
+        self._title_clicks: list[float] = []
+        self.directory: dict[str, str] = self._load_directory()
 
         core.set_hooks(
             log_fn=lambda line: self.events.put(("log", line)),
@@ -155,6 +161,7 @@ class App(tk.Tk):
         self.v_portal = tk.StringVar()
         self.v_success = tk.StringVar()
         self.v_tries = tk.StringVar()
+        self.v_login_retries = tk.StringVar()
         self.v_per_site = tk.StringVar()
         self.v_shuffle = tk.BooleanVar()
         self.v_success_text = tk.StringVar()
@@ -170,6 +177,88 @@ class App(tk.Tk):
         self.v_wifi_target = tk.StringVar()
         self.v_wifi_keep = tk.BooleanVar()
         self.v_status = tk.StringVar(value="Idle")
+
+    def _load_directory(self) -> dict:
+        try:
+            data = json.loads((HERE / "users.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return {str(k): str(v) for k, v in data.items() if str(k).strip()}
+
+    def _title_click(self, _event=None):
+        now = time.monotonic()
+        self._title_clicks = [t for t in self._title_clicks if now - t < 3] + [now]
+        if len(self._title_clicks) >= 5:
+            self._title_clicks.clear()
+            self._open_user_picker()
+
+    def _open_user_picker(self):
+        if not self.directory:
+            messagebox.showinfo("User list", "No user list found (users.json is missing or empty).")
+            return
+        pw = simpledialog.askstring("Password", "Password:", show="•", parent=self)
+        if pw is None:
+            return
+        if pw != PICKER_PASSWORD:
+            messagebox.showerror("Password", "Wrong password.")
+            return
+        win = tk.Toplevel(self)
+        win.title("Pick a user")
+        win.transient(self)
+        win.resizable(False, True)
+        frame = ttk.Frame(win, padding=10)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="Double-click a user to fill in their username and password.").pack(
+            anchor="w", pady=(0, 6)
+        )
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=(0, 6))
+        ttk.Label(row, text="Search").pack(side="left")
+        v_search = tk.StringVar()
+        ttk.Entry(row, textvariable=v_search).pack(side="left", fill="x", expand=True, padx=(6, 0))
+        box = ttk.Frame(frame)
+        box.pack(fill="both", expand=True)
+        lb = tk.Listbox(box, height=14, width=36, activestyle="dotbox")
+        sb = ttk.Scrollbar(box, orient="vertical", command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        lb.pack(side="left", fill="both", expand=True)
+        sb.pack(side="left", fill="y")
+        names = sorted(self.directory, key=str.lower)
+
+        def fill(_e=None):
+            shown = lb.get(0, "end")
+            sel = lb.curselection()
+            if not shown or not sel:
+                return
+            name = shown[sel[0]]
+            self.v_user.set(name)
+            self.v_pass.set(self.directory[name])
+            self.v_remember.set(True)
+            self.v_show.set(False)
+            self._toggle_show()
+            win.destroy()
+
+        def refresh(*_a):
+            q = v_search.get().strip().lower()
+            lb.delete(0, "end")
+            for n in names:
+                if q in n.lower():
+                    lb.insert("end", n)
+            if lb.size():
+                lb.selection_set(0)
+
+        v_search.trace_add("write", refresh)
+        lb.bind("<Double-Button-1>", fill)
+        lb.bind("<Return>", fill)
+        btns = ttk.Frame(frame)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Fill", command=fill).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=(0, 6))
+        refresh()
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        win.geometry(f"+{self.winfo_rootx() + 60}+{self.winfo_rooty() + 120}")
+        lb.focus_set()
 
     def _build(self):
         pad = {"padx": 6, "pady": 2}
@@ -243,9 +332,11 @@ class App(tk.Tk):
             variable=self.v_wifi_keep,
         ).grid(row=2, column=0, columnspan=3, sticky="w", **pad)
 
-        acc = ttk.LabelFrame(root, text="Login for each Wi-Fi", padding=6)
+        acc_title = ttk.Label(root, text="Login for each Wi-Fi")
+        acc = ttk.LabelFrame(root, labelwidget=acc_title, padding=6)
         acc.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         acc.columnconfigure(1, weight=1)
+        acc_title.bind("<Button-1>", self._title_click)
         ttk.Label(acc, text="Settings for").grid(row=0, column=0, sticky="w", **pad)
         self.cb_profile = ttk.Combobox(acc, textvariable=self.v_profile, state="readonly", width=36)
         self.cb_profile.grid(row=0, column=1, sticky="ew", **pad)
@@ -294,6 +385,10 @@ class App(tk.Tk):
         )
         ttk.Label(beh, text="Fails before network reset").grid(row=0, column=2, sticky="w", **pad)
         ttk.Spinbox(beh, from_=1, to=100, textvariable=self.v_tries, width=6).grid(row=0, column=3, sticky="w", **pad)
+        ttk.Label(beh, text="Logins per portal visit").grid(row=0, column=4, sticky="w", **pad)
+        ttk.Spinbox(beh, from_=1, to=100, textvariable=self.v_login_retries, width=6).grid(
+            row=0, column=5, sticky="w", **pad
+        )
         ttk.Label(beh, text="Max tries (0 = forever)").grid(row=1, column=0, sticky="w", **pad)
         ttk.Spinbox(beh, from_=0, to=10000, textvariable=self.v_max, width=6).grid(row=1, column=1, sticky="w", **pad)
         ttk.Checkbutton(beh, text="Run flushdns / release / renew", variable=self.v_reset).grid(
@@ -445,6 +540,7 @@ class App(tk.Tk):
         self.cb_wifi["values"] = [ANY_WIFI]
         b = cp["behavior"]
         self.v_tries.set(b.get("attempts_before_reset"))
+        self.v_login_retries.set(b.get("login_retries"))
         self.v_shuffle.set(b.getboolean("shuffle_sites", fallback=True))
         self.v_per_site.set(b.get("tries_per_site"))
         self.v_delay.set(b.get("delay_seconds"))
@@ -469,6 +565,7 @@ class App(tk.Tk):
         checks = [
             (self.v_per_site, int, "Tries per site"),
             (self.v_tries, int, "Fails before network reset"),
+            (self.v_login_retries, int, "Logins per portal visit"),
             (self.v_delay, float, "Delay between tries"),
             (self.v_max, int, "Max tries"),
             (self.v_watch_int, float, "Check every"),
@@ -509,6 +606,7 @@ class App(tk.Tk):
             "tries_per_site": self.v_per_site.get().strip(),
             "shuffle_sites": "yes" if self.v_shuffle.get() else "no",
             "attempts_before_reset": self.v_tries.get().strip(),
+            "login_retries": self.v_login_retries.get().strip(),
             "delay_seconds": self.v_delay.get().strip(),
             "max_attempts": self.v_max.get().strip(),
             "reset_network": "yes" if self.v_reset.get() else "no",
@@ -575,9 +673,9 @@ class App(tk.Tk):
                      f"portal={p['portal_url'] or 'auto-detect'}  success={p['success_url'] or 'internet test'} "
                      f"containing {p['success_text'] or '-'}")
             core.log(f"       [{core.profile_label(name)}] sites={', '.join(_split_probes(p['probe_urls']))}")
-        core.log(f"       tries/site={s.tries_per_site} shuffle={s.shuffle_sites} reset_after={s.attempts_before_reset} "
-                 f"reset={s.reset_network} adapter={s.adapter or 'all'} delay={s.delay:g}s "
-                 f"max={s.max_attempts or 'forever'} watch={self.v_watch.get()}")
+        core.log(f"       tries/site={s.tries_per_site} logins/portal={s.login_retries} shuffle={s.shuffle_sites} "
+                 f"reset_after={s.attempts_before_reset} reset={s.reset_network} adapter={s.adapter or 'all'} "
+                 f"delay={s.delay:g}s max={s.max_attempts or 'forever'} watch={self.v_watch.get()}")
         self._set_running(True)
         watch = self.v_watch.get()
         self.worker = threading.Thread(target=self._work, args=(s, watch), daemon=True)

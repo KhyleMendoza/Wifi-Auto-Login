@@ -17,7 +17,7 @@ a = Analysis(
     pathex=[],
     excludes=EXCLUDES,
     noarchive=False,
-    optimize=1,
+    optimize=2,
 )
 a.datas = [d for d in a.datas if not d[0].startswith(SKIP_DATA)]
 a.binaries = [b for b in a.binaries if not os.path.basename(b[0]).lower().startswith(("_brotli", "_cffi_backend"))]

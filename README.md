@@ -68,7 +68,33 @@ pip install pyinstaller requests
 python -m PyInstaller --noconfirm WiFiAutoLogin.spec
 ```
 
-It ends up in the `dist` folder. I tuned the build so it opens fast even on our older PCs, and only one copy can run at a time.
+It ends up as a single `dist\WiFiAutoLogin.exe`. Heads up: a single-file exe unpacks itself to a temp folder every time it opens, so it starts a bit slower on older PCs. Only one copy can run at a time.
+
+## Sharing it on the office network
+
+There's a small download page in the `server` folder, so people at the office can grab the app from their browser instead of passing the exe around on a USB stick. Double-click `server\start_server.bat` (or run `python server\server.py`) and open `http://192.168.210.112:3030` on any PC on the network.
+
+Want a different port? Run `start_server.bat 8080` or `python server\server.py --port 8080`.
+
+The page offers a zip with `WiFiAutoLogin.exe` and a clean `config.ini` (no username or password in it). People unzip it and run the exe. It always zips whatever exe is in `dist`, so after you rebuild, people get the new one automatically. It only needs Python, nothing to install.
+
+If other PCs can't open the page, Windows Firewall is probably blocking the port. Run this once as admin:
+
+```
+netsh advfirewall firewall add rule name="WiFi Auto Login download" dir=in action=allow protocol=TCP localport=3030
+```
+
+### The hidden "with user list" download
+
+The normal download never includes `users.json`, so the user picker won't work on it. To set up another admin PC that *should* have the full user list, there's a hidden download on the page: click the **"WiFi Auto Login"** title 5 times and a second button appears, which asks for a password and then gives you a zip that includes `users.json`.
+
+Set that password in `server\start_server.bat` (the `set WIFI_ADMIN_PASSWORD=...` line), or pass it when you start the server:
+
+```
+python server\server.py --port 3030 --admin-password "YourSecret"
+```
+
+By default the password is just `password`, so the feature works out of the box. That's easy to guess, so change it to something only you know if the user list matters. Set it blank to turn this download off completely. The server checks the password itself, so the download can't be grabbed just by knowing the link. Still, keep in mind it hands out everyone's passwords over the office network, so only share the password with people who should set up admin PCs.
 
 ## Known limits
 

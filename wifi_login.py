@@ -156,6 +156,7 @@ class Settings:
         self.tries_per_site = max(1, int(g("behavior", "tries_per_site", "10") or 10))
         self.shuffle_sites = is_yes(g("behavior", "shuffle_sites", "yes"))
         self.attempts_before_reset = int(g("behavior", "attempts_before_reset", "3") or 3)
+        self.login_retries = max(1, int(g("behavior", "login_retries", "20") or 20))
         self.delay = float(g("behavior", "delay_seconds", "2") or 2)
         self.max_attempts = int(g("behavior", "max_attempts", "0") or 0)
         self.reset_network = is_yes(g("behavior", "reset_network", "yes"))
@@ -890,6 +891,7 @@ def connect(settings: Settings) -> bool:
     while True:
         check_stop()
         before = attempts
+        portal_seen = False
         try:
             wifi = ensure_wifi(settings)
             ssid = wifi["ssid"]
@@ -933,6 +935,7 @@ def connect(settings: Settings) -> bool:
 
             attempts += 1
             if state == "portal":
+                portal_seen = True
                 u = urlparse(url)
                 base = f"{u.scheme}://{u.netloc}"
                 if u.hostname and base != _found_portal.get(ssid):
@@ -940,15 +943,21 @@ def connect(settings: Settings) -> bool:
                     _portal_hosts.add(u.hostname)
                     log(f"   portal for this network: {base}")
                     status("portal_found", f"{ssid}|{base}")
-                status("logging in", f"attempt {attempts}  via {site}")
-                log(f"Attempt {attempts}: logging in at {url}")
-                ok = submit_login(url, settings)
-                wait(1.5)
-                if ok and confirm_connected(settings):
-                    status("connected", f"after {attempts} attempt(s)")
-                    return True
-                if ok:
-                    log("   still not through after login")
+                # The FortiGate often rejects the first several logins before one sticks, so
+                # keep re-submitting it quickly while the portal is reachable (no network reset -
+                # that would only disconnect us). Stops the moment we are really online.
+                for i in range(1, settings.login_retries + 1):
+                    check_stop()
+                    status("logging in", f"attempt {attempts}  login {i}/{settings.login_retries}")
+                    log(f"Attempt {attempts}: logging in at {url} (login {i}/{settings.login_retries})")
+                    ok = submit_login(url, settings)
+                    wait(1.5)
+                    if ok and confirm_connected(settings):
+                        status("connected", f"after {attempts} attempt(s)")
+                        return True
+                    log("   still not through after login" if ok else "   login not accepted")
+                    if i < settings.login_retries:
+                        wait(settings.delay)
             else:
                 status("offline", f"attempt {attempts}")
                 log(f"Attempt {attempts}: no site or portal reachable")
@@ -962,12 +971,16 @@ def connect(settings: Settings) -> bool:
         if tries_on_site >= settings.tries_per_site:
             pos, tries_on_site = pos + 1, 0
 
-        fails_since_reset += 1
         if settings.max_attempts and attempts >= settings.max_attempts:
             log(f"Giving up after {attempts} attempts.")
             status("failed", f"gave up after {attempts} attempts")
             return False
-        if settings.reset_network and fails_since_reset >= settings.attempts_before_reset:
+        # The portal being reachable means a network reset would only cut us off, so only
+        # count toward a reset when we couldn't reach the portal at all.
+        if portal_seen:
+            fails_since_reset = 0
+            wait(settings.delay)
+        elif settings.reset_network and (fails_since_reset := fails_since_reset + 1) >= settings.attempts_before_reset:
             try:
                 reset_network(settings)
             except Stopped:
